@@ -1,0 +1,6 @@
+authserver/*.json
+sync-backend/config.json
+tmp
+main
+bin/
+srv
