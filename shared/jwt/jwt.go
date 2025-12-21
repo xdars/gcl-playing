@@ -2,18 +2,36 @@ package jwt
 
 import (
 	"fmt"
-	"github.com/golang-jwt/jwt/v5"
+	"os"
+	"sync"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-var jwtSecret = []byte("secret-key")
+var (
+	jwtSecret []byte
+	once      sync.Once
+)
+
+func getSecret() []byte {
+	once.Do(func() {
+		secret := os.Getenv("JWT_SECRET")
+		if secret == "" {
+			fmt.Println("WARNING: JWT_SECRET not set. Using insecure default. Set JWT_SECRET env var in production.")
+			secret = "dev-secret-do-not-use-in-production"
+		}
+		jwtSecret = []byte(secret)
+	})
+	return jwtSecret
+}
 
 func ParseJWT(tokenStr string) (string, error) {
 	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
-		return jwtSecret, nil
+		return getSecret(), nil
 	})
 
 	if err != nil {
@@ -35,5 +53,5 @@ func GenerateJWT(email string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getSecret())
 }
