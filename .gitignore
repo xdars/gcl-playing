@@ -1,6 +1,21 @@
-authserver/*.json
+# Sensitive config files
+auth-server/*.json
+watcher/config.json
 sync-backend/config.json
+
+# Database files
+*.db
+
+# Environment files (keep .env.example)
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
 tmp
 main
 bin/
 srv
+
+# OS files
+.DS_Store
