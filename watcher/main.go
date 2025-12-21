@@ -1,109 +1,45 @@
 package main
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
-	"golang.org/x/oauth2"
-	"google.golang.org/api/calendar/v3"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
-	"fmt"
-	"io/ioutil"
-	"bytes"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
+	"google.golang.org/api/calendar/v3"
 )
 
 type Config struct {
-	BackendAddr        string `json:"backendAddr"`
-	BackendPort        string `json:"backendPort"`
-	WatcherPort        string `json:"watcherPort"`
-	OutlookClid        string `json:"outlook_clid"`
-	OutlookSecret      string `json:"outlook_secret"`
-	GoogleClientID     string `json:"google_client_id"`
-	GoogleClientSecret string `json:"google_client_secret"`
-	GoogleRedirectURI  string `json:"google_redirect_uri"`
+	BackendAddr   string
+	BackendPort   string
+	WatcherPort   string
+	OutlookClid   string
+	OutlookSecret string
 }
 
 var config Config
 var oauthConf *oauth2.Config
 
-/*
-	curl -X POST \
-  -H "Authorization: Bearer <ACCESS_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "your-channel-id-uuid",
-    "type": "web_hook",
-    "address": ""
-  }' \
-  "https://www.googleapis.com/calendar/v3/calendars/<calendarId>/events/watch"
-*/
-
-func setWatcher(token, calendarID string) {
-	/*_, err := http.Post("https://www.googleapis.com/calendar/v3/calendars/"+calendarID+"/events/watch", "application/json",
-		toReader(gin.H{
-			"id":      "someuniquestuff",
-			"type":    "web_hook",
-			"address": "",
-		},
-		),
-	)
-	if err != nil {
-		log.Printf("Setting watcher failed: %v", err)
-		return
-	}*/
-
-	payload := map[string]interface{}{
-		"id":      "someuniquestuff",
-		"type":    "web_hook",
-		"address": "",
+func getEnv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
 	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		log.Fatalf("Error marshaling JSON: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", "https://www.googleapis.com/calendar/v3/calendars/"+calendarID+"/events/watch", bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		log.Fatalf("Error creating request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Fatalf("Error sending request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatalf("Error reading response body: %v", err)
-	}
-
-	fmt.Printf("Response Status: %s\n", resp.Status)
-	fmt.Printf("Response Body: %s\n", body)
+	return fallback
 }
+
 func main() {
 	loadConfig()
 	initOAuth()
 
 	r := gin.Default()
-	// This is supposed to set a watcher on each user we have in our DB, it not set yet.
-	setWatcher(at, calendarID)
 
-	/*r.POST("/event/:eventId", handleEvent)
-	r.POST("/changewh/:at/:rt/:email", handleChangeWebhook)
-	r.POST("/mergewh/:at/:rt/:email", handleMergeWebhook)
-	r.POST("/outlook/webhook/:email", handleOutlookWebhook)*/
 	r.POST("/google/webhook", handleGoogleWebhook)
 
 	log.Printf("Watcher running on port %s", config.WatcherPort)
@@ -112,15 +48,34 @@ func main() {
 	}
 }
 
+func loadConfig() {
+	config = Config{
+		BackendAddr:   getEnv("BACKEND_ADDR", "http://localhost"),
+		BackendPort:   getEnv("BACKEND_PORT", "8080"),
+		WatcherPort:   getEnv("WATCHER_PORT", "3030"),
+		OutlookClid:   os.Getenv("OUTLOOK_CLIENT_ID"),
+		OutlookSecret: os.Getenv("OUTLOOK_CLIENT_SECRET"),
+	}
+}
+
 func initOAuth() {
+	clientID := os.Getenv("GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
+
+	if clientID == "" || clientSecret == "" {
+		log.Fatal("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables must be set")
+	}
+
+	redirectURI := getEnv("GOOGLE_REDIRECT_URI", "http://localhost:3030/auth/callback")
+
 	oauthConf = &oauth2.Config{
-		ClientID:     config.GoogleClientID,
-		ClientSecret: config.GoogleClientSecret,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
 			TokenURL: "https://oauth2.googleapis.com/token",
 		},
-		RedirectURL: config.GoogleRedirectURI,
+		RedirectURL: redirectURI,
 		Scopes:      []string{calendar.CalendarReadonlyScope},
 	}
 }
@@ -128,11 +83,22 @@ func initOAuth() {
 func handleGoogleWebhook(c *gin.Context) {
 	resourceID := c.GetHeader("X-Goog-Resource-ID")
 	if resourceID == "" {
+		log.Println("Missing X-Goog-Resource-ID header")
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	calendarID := "@gmail.com"                                                                                                                                                                                         // допустим
-	at := "access_token" // load from DB by calendarID                                                                                                                          // refresh_token
+
+	// TODO: Load calendar ID and tokens from database based on resourceID
+	calendarID := "" // Load from DB
+	at := ""         // Access token from DB
+	rt := ""         // Refresh token from DB
+
+	if calendarID == "" || at == "" {
+		log.Println("Calendar not configured - webhook received but no calendar mapping")
+		c.Status(http.StatusOK) // Acknowledge webhook but do nothing
+		return
+	}
+
 	token := &oauth2.Token{
 		AccessToken:  at,
 		RefreshToken: rt,
@@ -144,7 +110,7 @@ func handleGoogleWebhook(c *gin.Context) {
 
 	srv, err := calendar.New(client)
 	if err != nil {
-		log.Println("calendar client error:", err)
+		log.Printf("Calendar client error: %v", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
@@ -157,27 +123,56 @@ func handleGoogleWebhook(c *gin.Context) {
 		TimeMin(updatedMin).
 		Do()
 	if err != nil {
-		log.Println("failed to list events:", err)
+		log.Printf("Failed to list events: %v", err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}
 
 	for _, event := range events.Items {
 		log.Printf("Triggering /event/%s (%s)\n", event.Id, event.Summary)
-		postToBackend("/event/"+event.Id, gin.H{"summary": event.Summary})
+		postToBackend("/event/"+event.Id, map[string]string{"summary": event.Summary})
 	}
 
 	c.Status(http.StatusOK)
 }
 
-func loadConfig() {
-	data, err := os.ReadFile("config.json")
+func setWatcher(token, calendarID, webhookAddress string) error {
+	payload := map[string]interface{}{
+		"id":      "channel-" + calendarID,
+		"type":    "web_hook",
+		"address": webhookAddress,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		log.Fatal("Failed to read config.json:", err)
+		return err
 	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Fatal("Invalid config.json:", err)
+
+	req, err := http.NewRequest("POST",
+		"https://www.googleapis.com/calendar/v3/calendars/"+calendarID+"/events/watch",
+		bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return err
 	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		log.Printf("Watcher setup failed: %s - %s", resp.Status, string(body))
+	} else {
+		log.Printf("Watcher set for calendar: %s", calendarID)
+	}
+
+	return nil
 }
 
 func postToBackend(endpoint string, payload any) {
@@ -193,31 +188,9 @@ func postToBackend(endpoint string, payload any) {
 
 func toReader(v any) io.Reader {
 	buf, _ := json.Marshal(v)
-	return io.NopCloser(io.Reader(&bufReader{data: buf}))
-}
-
-type bufReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *bufReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
+	return bytes.NewReader(buf)
 }
 
 func splitResource(s string) []string {
 	return strings.Split(s, "/")
-}
-
-func decodeBase64Param(p string) string {
-	decoded, err := base64.StdEncoding.DecodeString(p)
-	if err != nil {
-		return ""
-	}
-	return string(decoded)
 }
