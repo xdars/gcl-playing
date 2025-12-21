@@ -1,18 +1,18 @@
 package handler
 
 import (
-	"github.com/gin-gonic/gin"
-	//"html/template"
-	"log"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+
 	"calendar-backend/database"
-	. "shared/jwt"
-	//"io/ioutil"
+	"shared/jwt"
+	"shared/logger"
 )
 
 func HandleEvent(c *gin.Context) {
 	eventId := c.Param("eventId")
-	log.Printf("Received event: %s", eventId)
+	logger.Info.Printf("Received event: %s", eventId)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Event received",
@@ -21,28 +21,29 @@ func HandleEvent(c *gin.Context) {
 }
 
 func HandleAddCalendar(c *gin.Context) {
-	c.Redirect(http.StatusSeeOther, "http://localhost:3000/auth")
+	authURL := "http://localhost:3000/auth"
+	c.Redirect(http.StatusSeeOther, authURL)
 }
 
 func HandleTokens(c *gin.Context) {
-	jwt, err := c.Cookie("JWT")
+	jwtCookie, err := c.Cookie("JWT")
 	if err != nil {
-		log.Println("JWT cookie not found:", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"msg": "unauthorized"})
+		logger.Warn.Printf("JWT cookie not found: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	sub, err := ParseJWT(jwt)
+	sub, err := jwt.ParseJWT(jwtCookie)
 	if err != nil {
-		log.Println("Invalid JWT:", err)
-		c.JSON(http.StatusUnauthorized, gin.H{"msg": "invalid token"})
+		logger.Warn.Printf("Invalid JWT: %v", err)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 		return
 	}
 
 	user, err := database.GetUser(sub)
 	if err != nil {
-		log.Println("Failed to get user:", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"msg": "couldn't get user data"})
+		logger.Error.Printf("Failed to get user %s: %v", sub, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retrieve user data"})
 		return
 	}
 

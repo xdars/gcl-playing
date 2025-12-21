@@ -2,39 +2,30 @@ package database
 
 import (
 	"fmt"
-	"database/sql"
-	_ "github.com/mattn/go-sqlite3"
-	"log"
+
+	shareddb "shared/database"
 )
 
 type User struct {
-	Token string
+	Token  string
 	RToken string
 }
 
 func GetUser(email string) (*User, error) {
-	db, err := sql.Open("sqlite3", "../data.db")
+	db, err := shareddb.GetDB()
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("failed to get database: %w", err)
 	}
-	defer db.Close()
 
-	stmt, err := db.Prepare("select token, refresh_token from users where email = ?")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer stmt.Close()
-	var token string
-	var rtoken string
-	err = stmt.QueryRow(email).Scan(&token, &rtoken)
-	if err != nil {
-		fmt.Println(err)
-		return nil, err
-	}
-	if len(token) == 0 {
-		log.Println("token is empty. = used does not exist")
-	}
-	user := &User{token, rtoken}
-	return user, nil
+	var token, rtoken string
+	err = db.QueryRow(
+		"SELECT token, refresh_token FROM users WHERE email = ?",
+		email,
+	).Scan(&token, &rtoken)
 
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user %s: %w", email, err)
+	}
+
+	return &User{Token: token, RToken: rtoken}, nil
 }

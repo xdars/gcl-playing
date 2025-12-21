@@ -7,15 +7,24 @@ toolchain go1.23.11
 require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
-	github.com/mattn/go-sqlite3 v1.14.30
+	github.com/mattn/go-sqlite3 v1.14.30 // indirect
 )
 
 require (
 	github.com/gin-contrib/cors v1.7.6
+	shared/database v0.0.0
 	shared/jwt v0.0.0
+	shared/logger v0.0.0
+	shared/middleware v0.0.0
 )
 
 replace shared/jwt => ../shared/jwt
+
+replace shared/database => ../shared/database
+
+replace shared/logger => ../shared/logger
+
+replace shared/middleware => ../shared/middleware
 
 require (
 	github.com/bytedance/sonic v1.13.3 // indirect
