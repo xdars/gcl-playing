@@ -7,41 +7,38 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
-	"database/sql"
 	gonanoid "github.com/matoous/go-nanoid/v2"
-	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"io/ioutil"
+	"shared/database"
 	. "shared/jwt"
-	"time"
 )
-
-type Client struct {
-	ID     string `json:"client_id"`
-	Secret string `json:"client_secret"`
-}
 
 var oauthConfig *oauth2.Config
 
-func SetupOAuthConfig() {
-	config, err := os.Open("cfg.json")
-	if err != nil {
-		fmt.Println(err)
+func getEnv(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
 	}
-	defer config.Close()
+	return fallback
+}
 
-	byteValue, _ := ioutil.ReadAll(config)
+func SetupOAuthConfig() {
+	clientID := os.Getenv("GOOGLE_CLIENT_ID")
+	clientSecret := os.Getenv("GOOGLE_CLIENT_SECRET")
 
-	var client Client
+	if clientID == "" || clientSecret == "" {
+		log.Fatal("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables must be set")
+	}
 
-	json.Unmarshal(byteValue, &client)
+	redirectURL := getEnv("OAUTH_REDIRECT_URL", "http://localhost:3000/auth/callback")
 
 	oauthConfig = &oauth2.Config{
-		ClientID:     client.ID,
-		ClientSecret: client.Secret,
-		RedirectURL:  "http://localhost:3000/auth/callback",
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/userinfo.profile",
 			"https://www.googleapis.com/auth/userinfo.email",
@@ -52,69 +49,64 @@ func SetupOAuthConfig() {
 }
 
 func userExists(email string) bool {
-	db, err := sql.Open("sqlite3", "../data.db")
+	db, err := database.GetDB()
 	if err != nil {
-		log.Println(err)
-	}
-	defer db.Close()
-
-	stmt, err := db.Prepare("select token from users where email = ?")
-	if err != nil {
-		log.Println(err)
-	}
-	defer stmt.Close()
-	var token string
-	err = stmt.QueryRow(email).Scan(&token)
-	if err != nil {
-		fmt.Println("user does not exist")
+		log.Printf("Failed to get database: %v", err)
 		return false
 	}
-	if len(token) == 0 {
-		log.Println("token is empty. = used does not exist")
-	}
 
+	var token string
+	err = db.QueryRow("SELECT token FROM users WHERE email = ?", email).Scan(&token)
+	if err != nil {
+		return false
+	}
 	return true
 }
 
-func addUser(email, token, rtoken string) {
-	db, err := sql.Open("sqlite3", "../data.db")
+func addUser(email, token, rtoken string) error {
+	db, err := database.GetDB()
 	if err != nil {
-		log.Println(err)
+		return fmt.Errorf("failed to get database: %w", err)
 	}
-	defer db.Close()
 
 	tx, err := db.Begin()
 	if err != nil {
-		log.Println(err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	stmt, err := tx.Prepare("insert into users(id, email, created_at, token, refresh_token, is_outlook) values(?, ?, ?, ?, ?, ?)")
-	if err != nil {
-		log.Println(err)
-	}
-	defer stmt.Close()
+
 	id, err := gonanoid.New()
 	if err != nil {
-		panic(err)
+		tx.Rollback()
+		return fmt.Errorf("failed to generate id: %w", err)
 	}
-	fmt.Printf("Generated id: %s\n", id)
-	_, err = stmt.Exec(id, email, 0, token, rtoken, 0)
-	if err != nil {
-		log.Println(err)
-	}
-	err = tx.Commit()
-	if err != nil {
-		log.Println(err)
-	}
-}
-func main() {
 
+	_, err = tx.Exec(
+		"INSERT INTO users(id, email, created_at, token, refresh_token, is_outlook) VALUES(?, ?, ?, ?, ?, ?)",
+		id, email, time.Now().Unix(), token, rtoken, 0,
+	)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to insert user: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
+	}
+
+	log.Printf("Added user: %s", email)
+	return nil
+}
+
+func main() {
 	SetupOAuthConfig()
+
 	http.HandleFunc("/login", handleLogin)
 	http.HandleFunc("/auth", handleAuth)
 	http.HandleFunc("/auth/callback", handleCallback)
 
-	fmt.Println("Auth server started at :3000")
-	http.ListenAndServe(":3000", nil)
+	port := getEnv("AUTH_SERVER_PORT", "3000")
+	fmt.Printf("Auth server started at :%s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -122,12 +114,14 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err == http.ErrNoCookie {
 		http.Redirect(w, r, "/auth", http.StatusFound)
 		return
-	} else {
-		if _, err := ParseJWT(jwt.Value); err == nil {
-			http.Redirect(w, r, "http://localhost:8080/home", http.StatusFound)
-			return
-		}
 	}
+
+	if _, err := ParseJWT(jwt.Value); err == nil {
+		backendURL := getEnv("BACKEND_URL", "http://localhost:8080")
+		http.Redirect(w, r, backendURL+"/home", http.StatusFound)
+		return
+	}
+
 	http.Redirect(w, r, "/auth", http.StatusFound)
 }
 
@@ -143,18 +137,18 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing code", http.StatusBadRequest)
 		return
 	}
+
 	token, err := oauthConfig.Exchange(ctx, code)
 	if err != nil {
-		http.Error(w, "Token exchange failed: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("Token exchange failed: %v", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Access Token: %s", token.AccessToken)
-	log.Printf("Refresh Token: %s", token.RefreshToken)
-	log.Printf("Expiry: %s", token.Expiry)
 	client := oauthConfig.Client(context.Background(), token)
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil {
+		log.Printf("Failed getting user info: %v", err)
 		http.Error(w, "Failed getting user info", http.StatusInternalServerError)
 		return
 	}
@@ -164,18 +158,25 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		log.Printf("Failed decoding user info: %v", err)
 		http.Error(w, "Failed decoding user info", http.StatusInternalServerError)
 		return
 	}
 
 	if !userExists(userInfo.Email) {
-		log.Printf("user %s does not exist. adding", userInfo.Email)
-		addUser(userInfo.Email, token.AccessToken, token.RefreshToken)
+		log.Printf("New user: %s", userInfo.Email)
+		if err := addUser(userInfo.Email, token.AccessToken, token.RefreshToken); err != nil {
+			log.Printf("Failed to add user: %v", err)
+			http.Error(w, "Failed to save user", http.StatusInternalServerError)
+			return
+		}
 	} else {
-		log.Printf("user %s exists. doing nothing", userInfo.Email)
+		log.Printf("Existing user: %s", userInfo.Email)
 	}
+
 	jwtToken, err := GenerateJWT(userInfo.Email)
 	if err != nil {
+		log.Printf("Failed to generate JWT: %v", err)
 		http.Error(w, "Failed to generate JWT", http.StatusInternalServerError)
 		return
 	}
@@ -183,12 +184,14 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	cookie := http.Cookie{
 		Name:     "JWT",
 		Value:    jwtToken,
-		Expires:  time.Now().Add(3600 * time.Hour),
+		Expires:  time.Now().Add(24 * time.Hour),
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   false, // Set to true in production with HTTPS
+		SameSite: http.SameSiteLaxMode,
 	}
 	http.SetCookie(w, &cookie)
-	redirectURL := fmt.Sprintf("http://localhost:5173/home")
-	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
+
+	frontendURL := getEnv("FRONTEND_URL", "http://localhost:5173")
+	http.Redirect(w, r, frontendURL+"/home", http.StatusSeeOther)
 }
