@@ -5,7 +5,6 @@ import (
 	"net/http"
 )
 
-// AppError represents an application error with HTTP status
 type AppError struct {
 	Code    int    `json:"-"`
 	Message string `json:"error"`
