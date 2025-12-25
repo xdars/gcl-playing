@@ -9,12 +9,19 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
 	gonanoid "github.com/matoous/go-nanoid/v2"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"shared/database"
 	. "shared/jwt"
 )
+
+func init() {
+	if err := godotenv.Load(); err != nil {
+		log.Printf("No .env file found, using environment variables")
+	}
+}
 
 var oauthConfig *oauth2.Config
 
@@ -97,6 +104,24 @@ func addUser(email, token, rtoken string) error {
 	return nil
 }
 
+func updateUserTokens(email, token, rtoken string) error {
+	db, err := database.GetDB()
+	if err != nil {
+		return fmt.Errorf("failed to get database: %w", err)
+	}
+
+	_, err = db.Exec(
+		"UPDATE users SET token = ?, refresh_token = ? WHERE email = ?",
+		token, rtoken, email,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update user tokens: %w", err)
+	}
+
+	log.Printf("Updated tokens for user: %s", email)
+	return nil
+}
+
 func main() {
 	SetupOAuthConfig()
 
@@ -172,6 +197,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		log.Printf("Existing user: %s", userInfo.Email)
+		if err := updateUserTokens(userInfo.Email, token.AccessToken, token.RefreshToken); err != nil {
+			log.Printf("Failed to update user tokens: %v", err)
+		}
 	}
 
 	jwtToken, err := GenerateJWT(userInfo.Email)
@@ -181,17 +209,6 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cookie := http.Cookie{
-		Name:     "JWT",
-		Value:    jwtToken,
-		Expires:  time.Now().Add(24 * time.Hour),
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   false, // Set to true in production with HTTPS
-		SameSite: http.SameSiteLaxMode,
-	}
-	http.SetCookie(w, &cookie)
-
-	frontendURL := getEnv("FRONTEND_URL", "http://localhost:5173")
-	http.Redirect(w, r, frontendURL+"/home", http.StatusSeeOther)
+	backendURL := getEnv("BACKEND_URL", "http://localhost:8080")
+	http.Redirect(w, r, backendURL+"/auth/callback?token="+jwtToken, http.StatusSeeOther)
 }
