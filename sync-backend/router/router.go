@@ -36,7 +36,20 @@ func SetupRouter() *gin.Engine {
 	r.StaticFile("/home/favicon.ico", filepath.Join(distDir, "favicon.ico"))
 
 	r.GET("/home", serveIndex(distDir))
+	r.GET("/auth/callback", handler.HandleAuthCallback)
+
+	// API routes
 	r.GET("/api/tokens", handler.HandleTokens)
+
+	// Connected accounts
+	r.GET("/api/connected-accounts", handler.HandleGetConnectedAccounts)
+	r.GET("/api/connected-accounts/:id/calendars", handler.HandleGetAvailableCalendars)
+	r.DELETE("/api/connected-accounts/:id", handler.HandleDeleteConnectedAccount)
+
+	// Calendars
+	r.GET("/api/calendars", handler.HandleGetCalendars)
+	r.POST("/api/calendars", handler.HandleAddCalendar)
+	r.DELETE("/api/calendars/:id", handler.HandleDeleteCalendar)
 
 	return r
 }
