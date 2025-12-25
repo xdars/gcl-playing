@@ -29,10 +29,85 @@ var migrations = []Migration{
 			CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 		`,
 	},
+	{
+		Version: 2,
+		Name:    "create_connected_accounts_table",
+		Up: `
+			CREATE TABLE IF NOT EXISTS connected_accounts (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				provider TEXT NOT NULL DEFAULT 'google',
+				provider_account_id TEXT NOT NULL,
+				email TEXT NOT NULL,
+				access_token TEXT NOT NULL,
+				refresh_token TEXT,
+				token_expiry INTEGER,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+				UNIQUE(user_id, provider, provider_account_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_connected_accounts_user_id ON connected_accounts(user_id);
+		`,
+	},
+	{
+		Version: 3,
+		Name:    "create_calendars_table",
+		Up: `
+			CREATE TABLE IF NOT EXISTS calendars (
+				id TEXT PRIMARY KEY,
+				user_id TEXT NOT NULL,
+				connected_account_id TEXT,
+				provider TEXT NOT NULL DEFAULT 'google',
+				provider_calendar_id TEXT NOT NULL,
+				name TEXT NOT NULL,
+				color TEXT,
+				is_primary INTEGER DEFAULT 0,
+				webhook_resource_id TEXT,
+				webhook_channel_id TEXT,
+				webhook_expiry INTEGER,
+				sync_token TEXT,
+				is_active INTEGER DEFAULT 1,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+				FOREIGN KEY (connected_account_id) REFERENCES connected_accounts(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_calendars_user_id ON calendars(user_id);
+			CREATE INDEX IF NOT EXISTS idx_calendars_connected_account_id ON calendars(connected_account_id);
+		`,
+	},
+	{
+		Version: 4,
+		Name:    "create_events_table",
+		Up: `
+			CREATE TABLE IF NOT EXISTS events (
+				id TEXT PRIMARY KEY,
+				calendar_id TEXT NOT NULL,
+				provider_event_id TEXT NOT NULL,
+				title TEXT,
+				description TEXT,
+				location TEXT,
+				start_time INTEGER NOT NULL,
+				end_time INTEGER NOT NULL,
+				is_all_day INTEGER DEFAULT 0,
+				status TEXT DEFAULT 'confirmed',
+				recurrence TEXT,
+				attendees TEXT,
+				etag TEXT,
+				raw_data TEXT,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				FOREIGN KEY (calendar_id) REFERENCES calendars(id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_events_calendar_id ON events(calendar_id);
+			CREATE INDEX IF NOT EXISTS idx_events_start_time ON events(start_time);
+			CREATE INDEX IF NOT EXISTS idx_events_provider_event_id ON events(calendar_id, provider_event_id);
+		`,
+	},
 }
 
 func RunMigrations(db *sql.DB) error {
-	// Ensure migrations table exists
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -44,7 +119,6 @@ func RunMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to create migrations table: %w", err)
 	}
 
-	// Get applied migrations
 	applied := make(map[int]bool)
 	rows, err := db.Query("SELECT version FROM schema_migrations")
 	if err != nil {
@@ -60,7 +134,6 @@ func RunMigrations(db *sql.DB) error {
 		applied[version] = true
 	}
 
-	// Sort and apply pending migrations
 	sort.Slice(migrations, func(i, j int) bool {
 		return migrations[i].Version < migrations[j].Version
 	})
