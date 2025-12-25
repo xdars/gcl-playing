@@ -7,11 +7,9 @@ import (
 )
 
 func TestGenerateAndParseJWT(t *testing.T) {
-	// Set test secret
 	os.Setenv("JWT_SECRET", "test-secret-key-for-testing-purposes")
 	defer os.Unsetenv("JWT_SECRET")
 
-	// Reset the once for testing
 	jwtSecret = nil
 	once = sync.Once{}
 
@@ -40,7 +38,6 @@ func TestParseInvalidJWT(t *testing.T) {
 	os.Setenv("JWT_SECRET", "test-secret-key-for-testing-purposes")
 	defer os.Unsetenv("JWT_SECRET")
 
-	// Reset the once for testing
 	jwtSecret = nil
 	once = sync.Once{}
 
@@ -54,7 +51,6 @@ func TestParseEmptyJWT(t *testing.T) {
 	os.Setenv("JWT_SECRET", "test-secret-key-for-testing-purposes")
 	defer os.Unsetenv("JWT_SECRET")
 
-	// Reset the once for testing
 	jwtSecret = nil
 	once = sync.Once{}
 
